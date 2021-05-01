@@ -1,0 +1,54 @@
+<html>
+  <head>
+    <title>
+      Write and upload things
+    </title>
+
+    <link href="/assets/styles.css" rel="stylesheet"/>
+  </head>
+
+  <body>
+    <h1>
+      Write something to Sausage or upload some file
+    </h1>
+
+    <div>
+      <h3>
+        Write some text here
+      </h3>
+
+      <div>
+        <form action="/text" method="POST">
+          <textarea cols="60" id="" name="text" rows="10"></textarea>
+
+          <br/>
+
+          <button>
+            Send
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <div>
+      <hr/>
+
+      <h3>
+        Or upload a file here
+      </h3>
+    </div>
+
+    <div>
+      <form action="file" method="POST" enctype="multipart/form-data">
+        <label for="file">Put you file here:</label>
+        <input type="file" id="file" name="file">
+
+        <br/>
+        <button>
+          Upload this file
+        </button>
+      </form>
+    </div>
+
+  </body>
+</html>
