@@ -1,30 +1,26 @@
 #![feature(test)]
 
-// TODO: add some kind of user agent to the filename
-
-extern crate form_urlencoded;
 extern crate chrono;
-extern crate ascii;
+extern crate form_urlencoded;
 
-// extern crate multipart;
 use multipart::server::{Multipart, SaveResult};
 
+use std::process;
 use std::thread;
 use std::time;
-use std::process;
 
-use std::fs;
-use std::path;
-use std::io::{self, Write};
 use std::fmt;
+use std::fs;
+use std::io::{self, Write};
+use std::path;
 
 use askama::Template;
 
 #[macro_use]
 extern crate rust_embed;
 
-use url::Url;
 use std::io::Cursor;
+use url::Url;
 
 mod sanitize_filename;
 use sanitize_filename::sanitize_filename;
@@ -35,20 +31,18 @@ struct StaticAsset;
 
 #[derive(Template)]
 #[template(path = "home.html", escape = "none")]
-struct HomeTemplate {
-}
+struct HomeTemplate {}
 
 #[derive(Template)]
 #[template(path = "error_page.html", escape = "none")]
 struct ErrorPageTemplate<'a> {
-    err: &'a Error
+    err: &'a Error,
 }
 
 const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:2022";
 
 fn content_type_header(value: &str) -> tiny_http::Header {
-    tiny_http::Header::from_bytes(
-        &b"Content-Type"[..], value).unwrap()
+    tiny_http::Header::from_bytes(&b"Content-Type"[..], value).unwrap()
 }
 
 struct Srv<'a> {
@@ -134,7 +128,8 @@ struct Error {
 impl Error {
     fn new<T: fmt::Display>(kind: ErrorKind, msg: T) -> Self {
         Error {
-            kind, msg: msg.to_string(),
+            kind,
+            msg: msg.to_string(),
         }
     }
 
@@ -153,7 +148,8 @@ impl Error {
 impl<'a> Srv<'a> {
     fn new(http: tiny_http::Server, base_url: Url, output_path: &'a str) -> Self {
         Srv {
-            http, base_url,
+            http,
+            base_url,
             html_content_type: content_type_header("text/html"),
             die_after_single_request: false,
             output_path,
@@ -180,7 +176,6 @@ impl<'a> Srv<'a> {
             now.format("%F--%T.%f").to_string()
         };
 
-
         let filename = match name {
             Some(name) => format!("{}--{}--{}", date_str, name.as_ref(), typ.as_file_suffix()),
             None => format!("{}--{}", date_str, typ.as_file_suffix()),
@@ -194,7 +189,7 @@ impl<'a> Srv<'a> {
             .open(path)
     }
 
-    fn write_text(&self, text: &str) -> io::Result<()>  {
+    fn write_text(&self, text: &str) -> io::Result<()> {
         let mut file = self.create_file::<&str>(UploadType::Text, None)?;
         let bytes: &[u8] = text.as_bytes();
         file.write_all(bytes)?;
@@ -209,20 +204,21 @@ impl<'a> Srv<'a> {
             tiny_http::StatusCode(200),
             vec![self.html_content_type.clone()],
             cur,
-            None, None
+            None,
+            None,
         );
         req.respond(resp).expect("error while sending response");
     }
 
     fn respond_with_error(&self, err: &Error, req: tiny_http::Request) {
-        let data = ErrorPageTemplate {
-            err
-        }.render().unwrap().into_bytes();
+        let data = ErrorPageTemplate { err }.render().unwrap().into_bytes();
         let cur = Cursor::new(data);
         let resp = tiny_http::Response::new(
             tiny_http::StatusCode(err.as_http_code()),
             vec![self.html_content_type.clone()],
-            cur, None, None
+            cur,
+            None,
+            None,
         );
         req.respond(resp).expect("error while sending response");
     }
@@ -245,76 +241,70 @@ impl<'a> Srv<'a> {
                 let resp = tiny_http::Response::new(
                     tiny_http::StatusCode(200),
                     vec![content_type],
-                    cur, None, None
+                    cur,
+                    None,
+                    None,
                 );
                 req.respond(resp).expect("error while sending response");
-            },
+            }
             None => {
                 self.respond_with_error(
                     &Error::new(
                         ErrorKind::NotFound,
-                        format!("Asset \"{}\" not found", filename)),
-                    req);
-            },
+                        format!("Asset \"{}\" not found", filename),
+                    ),
+                    req,
+                );
+            }
         }
     }
 
     fn save_text(&self, req: &mut tiny_http::Request) -> Result<String, Error> {
         if req.method() != &tiny_http::Method::Post {
-            return Err(
-                Error::new(ErrorKind::UserError, "Send POST to this path"),
-            );
+            return Err(Error::new(ErrorKind::UserError, "Send POST to this path"));
         }
 
         let mut data = Vec::new();
 
-        req.as_reader().read_to_end(&mut data)
-            .map_err( |e| Error::from_io_error(
-                e, "Error receiving the data"))?;
+        req.as_reader()
+            .read_to_end(&mut data)
+            .map_err(|e| Error::from_io_error(e, "Error receiving the data"))?;
 
         let mut parser = form_urlencoded::parse(data.as_slice());
         let (k, v) = match parser.next() {
             None => {
                 return Err(Error::new(
-                    ErrorKind::UserError, "No arguments provided to /text")
-                );
-            },
+                    ErrorKind::UserError,
+                    "No arguments provided to /text",
+                ));
+            }
             Some(kv) => kv,
         };
         if k != "text" {
             return Err(Error::new(
                 ErrorKind::UserError,
-                format!(
-                    "Invalid parameter \"{}\" with value \"{}\" ",
-                    k, v)
+                format!("Invalid parameter \"{}\" with value \"{}\" ", k, v),
             ));
         }
 
         if let Some((k, v)) = parser.next() {
             return Err(Error::new(
                 ErrorKind::UserError,
-                format!(
-                    "Invalid extra parameter \"{}\" with value \"{}\" ",
-                    k, v
-                )
+                format!("Invalid extra parameter \"{}\" with value \"{}\" ", k, v),
             ));
         }
 
         let mut text = v;
 
         self.write_text(text.to_mut())
-            .map_err( |e| Error::from_io_error(e, "Write error"))?;
+            .map_err(|e| Error::from_io_error(e, "Write error"))?;
 
         Ok(format!("Saved text: {}", text))
     }
 
     fn handle_text(&self, mut req: tiny_http::Request) {
         match self.save_text(&mut req) {
-            Ok(msg) => {
-                self.respond_with_error(&Error::new(
-                    ErrorKind::Success, msg
-                ), req)
-            },
+            Ok(msg) => self.respond_with_error(&Error::new(ErrorKind::Success, msg), req),
             Err(err) => {
                 dbg!(err);
                 todo!()
@@ -324,10 +314,7 @@ impl<'a> Srv<'a> {
 
     fn save_file_from_request(&self, req: &mut tiny_http::Request) -> Result<(), Error> {
         let mut req = Multipart::from_request(req)
-            .map_err(
-                |e| Error::new(ErrorKind::ServerError, format!("{:?}", e)
-                )
-            )?;
+            .map_err(|e| Error::new(ErrorKind::ServerError, format!("{:?}", e)))?;
 
         let mut err: Result<(), Error> =
             Err(Error::new(ErrorKind::UserError, "no entries provided"));
@@ -335,42 +322,54 @@ impl<'a> Srv<'a> {
             let name = &*entry.headers.name.clone();
             if name == "file" {
                 // read file here
-                let file = self.create_file(
-                    UploadType::File,
-                    entry.headers.filename.map(sanitize_filename))
-                    .map_err(|e| Error::from_io_error(e, "create file error"));
+                let file = self
+                    .create_file(
+                        UploadType::File,
+                        entry.headers.filename.map(sanitize_filename),
+                    ).map_err(|e| Error::from_io_error(e, "create file error"));
 
                 let file = match file {
                     Ok(file) => file,
                     Err(e) => {
                         err = Err(e);
                         return;
-                    },
+                    }
                 };
 
-                let result = entry.data.save().memory_threshold(64*1024*1024).write_to(file);
+                let result = entry
+                    .data
+                    .save()
+                    .memory_threshold(64 * 1024 * 1024)
+                    .write_to(file);
 
                 match result {
-                    SaveResult::Full(_) => {},
-                    SaveResult::Partial(partial, partial_reason) => {
-                        err = Err(Error::new(
-                            ErrorKind::Unknown,
-                            format!("data partially saved/received, partial = {}, partial_reason = {:?}",
-                                    partial, partial_reason)))
-                    },
+                    SaveResult::Full(_) => {}
+                    SaveResult::Partial(partial, partial_reason) => err = Err(Error::new(
+                        ErrorKind::Unknown,
+                        format!(
+                            "data partially saved/received, partial = {}, partial_reason = {:?}",
+                            partial, partial_reason
+                        ),
+                    )),
                     SaveResult::Error(error) => {
                         err = Err(Error::new(
                             ErrorKind::ServerError,
-                            format!("data save error: {}", error)));
+                            format!("data save error: {}", error),
+                        ));
                     }
                 }
             } else {
                 err = Err(Error::new(
-                    ErrorKind::UserError, format!("invalid entry (expected only \"file\") {}", name)));
+                    ErrorKind::UserError,
+                    format!("invalid entry (expected only \"file\") {}", name),
+                ));
             }
-        }).map_err(|e| Error::new(
-            ErrorKind::ServerError,
-            format!("foreach_entry error: {:?}", e)))?;
+        }).map_err(|e| {
+            Error::new(
+                ErrorKind::ServerError,
+                format!("foreach_entry error: {:?}", e),
+            )
+        })?;
 
         Ok(())
     }
@@ -380,9 +379,9 @@ impl<'a> Srv<'a> {
             Ok(()) => {
                 self.respond_with_error(
                     &Error::new(ErrorKind::Success, "TODO: File uploaded!"),
-                    req
+                    req,
                 );
-            },
+            }
             Err(err) => {
                 self.respond_with_error(&err, req);
             }
@@ -407,24 +406,30 @@ impl<'a> Srv<'a> {
                 } else {
                     self.respond_with_error(
                         &Error::new(ErrorKind::NotFound, "/assets is not enumeratable"),
-                        req);
+                        req,
+                    );
                 }
-            },
+            }
             Some("text") => {
                 self.handle_text(req);
-            },
+            }
             Some("file") => {
                 self.handle_file_upload(req);
-            },
+            }
             Some(other) => {
                 self.respond_with_error(
-                    &Error::new(ErrorKind::NotFound,
-                                format!("There's nothing at /{}", other)),
-                    req);
-            },
+                    &Error::new(
+                        ErrorKind::NotFound,
+                        format!("There's nothing at /{}", other),
+                    ),
+                    req,
+                );
+            }
             None => {
-                panic!("first URL path segment is none but we also didn't handle home, \
-                        which should never happen. It's a programmer's error.");
+                panic!(
+                    "first URL path segment is none but we also didn't handle home, \
+                     which should never happen. It's a programmer's error."
+                );
             }
         }
     }
@@ -452,11 +457,8 @@ fn main() {
         Err(e) => panic!("http start error: {:?}", e),
     };
 
-    let base_url = Url::parse(
-        format!("http://{}", listen_addr).as_ref())
-        .unwrap();
+    let base_url = Url::parse(format!("http://{}", listen_addr).as_ref()).unwrap();
 
     let mut srv = Srv::new(http, base_url, "uploads");
     srv.run();
-
 }

@@ -1,5 +1,6 @@
 enum State {
-    Passed, Skipped
+    Passed,
+    Skipped,
 }
 
 fn is_byte_valid_char(c: u8) -> bool {
@@ -38,7 +39,7 @@ pub fn sanitize_filename<T: AsRef<str>>(filename: T) -> String {
                     // replace first invalid character in a row with underscore
                     state = State::Skipped;
                     out.push(b'_');
-                },
+                }
                 State::Skipped => {
                     // skip more than one invalid character in a row
                 }
@@ -46,10 +47,7 @@ pub fn sanitize_filename<T: AsRef<str>>(filename: T) -> String {
         }
     }
 
-    unsafe {
-        String::from_utf8_unchecked(out)
-    }
-
+    unsafe { String::from_utf8_unchecked(out) }
 }
 
 #[cfg(test)]
@@ -59,7 +57,10 @@ mod tests {
 
     #[test]
     fn test_valid() {
-        assert_eq!(sanitize_filename("test123_2.txt"), "test123_2.txt".to_string())
+        assert_eq!(
+            sanitize_filename("test123_2.txt"),
+            "test123_2.txt".to_string()
+        )
     }
 
     #[test]
@@ -69,6 +70,9 @@ mod tests {
 
     #[test]
     fn test_mix_valid_and_invalid() {
-        assert_eq!(sanitize_filename("hello🐧ыblah Ķ.txt"), "hello_blah_.txt".to_string())
+        assert_eq!(
+            sanitize_filename("hello🐧ыblah Ķ.txt"),
+            "hello_blah_.txt".to_string()
+        )
     }
 }

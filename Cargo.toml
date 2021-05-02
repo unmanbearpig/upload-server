@@ -7,21 +7,19 @@ edition = "2018"
 
 [dependencies]
 
-ascii = "0.8"
-
 # for generating filenames based on date and time
 chrono = "0.4.19"
 
 # http library
-tiny_http = "0.6.0"
-multipart = { version = "0.17.1", features = ["server", "tiny_http"] }
+tiny_http = "0.6.3"
+multipart = { version = "0.17.1", default_features = false, features = ["server", "tiny_http"] }
 
 # templates
-askama = "0.10"
+askama = { version = "0.10", default_features = false }
 
 # static files
 rust-embed = "5.8.0"
 
 # not sure if needed
-url = "2.2.1"
+url = "1.7.2"
 form_urlencoded = "1.0.1"
