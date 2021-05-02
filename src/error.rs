@@ -40,8 +40,8 @@ impl fmt::Display for ErrorKind {
 
 #[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
-    msg: String,
+    pub kind: ErrorKind,
+    pub msg: String,
 }
 
 impl Error {

@@ -36,11 +36,6 @@ arguments:
                         .ok_or_else(|| Error::new(
                             ErrorKind::UserError,
                             "Missing argument to --listen"))?;
-                    Url::parse(listen_addr_arg.as_ref())
-                        .map_err(|e| Error::new(
-                            ErrorKind::UserError,
-                            format!("invalid url: \"{}\": {:?}",
-                                    listen_addr_arg, e)))?;
                     listen_addr = Some(listen_addr_arg);
                 },
                 "--uploads-dir" => {
