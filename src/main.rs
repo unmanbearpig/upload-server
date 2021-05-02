@@ -1,4 +1,6 @@
 
+// TODO: add some kind of user agent to the filename
+
 extern crate tiny_http;
 extern crate form_urlencoded;
 extern crate chrono;
@@ -12,6 +14,7 @@ use std::process;
 use std::fs;
 use std::path;
 use std::io::{self, Write};
+use std::fmt;
 
 use askama::Template;
 
@@ -32,10 +35,9 @@ struct HomeTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "error.html", escape = "none")]
-struct ErrorTemplate<'a> {
-    code: u16,
-    msg: &'a str,
+#[template(path = "error_page.html", escape = "none")]
+struct ErrorPageTemplate<'a> {
+    err: &'a Error
 }
 
 const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:2022";
@@ -51,6 +53,66 @@ struct Srv<'a> {
     html_content_type: tiny_http::Header,
     die_after_single_request: bool,
     output_path: &'a str,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum ErrorKind {
+    Success,
+    ServerError,
+    UserError,
+    NotFound,
+}
+
+impl ErrorKind {
+    fn as_http_code(self) -> u16 {
+        match self {
+            ErrorKind::Success => 200,
+            ErrorKind::ServerError => 500,
+            ErrorKind::UserError => 400,
+            ErrorKind::NotFound => 404,
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            ErrorKind::Success => "Success",
+            ErrorKind::ServerError => "Server error",
+            ErrorKind::UserError => "Client error",
+            ErrorKind::NotFound => "Not found",
+        }
+    }
+}
+
+impl fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.description())
+    }
+}
+
+#[derive(Template, Debug)]
+#[template(path = "error.html", escape = "none")] // TODO: is escape = none safe here?
+struct Error {
+    kind: ErrorKind,
+    msg: String,
+}
+
+impl Error {
+    fn new<T: fmt::Display>(kind: ErrorKind, msg: T) -> Self {
+        Error {
+            kind, msg: msg.to_string(),
+        }
+    }
+
+    fn from_io_error<T: AsRef<str>>(err: io::Error, description: T) -> Self {
+        Error {
+            kind: ErrorKind::ServerError,
+            msg: format!("{}: {}", description.as_ref(), err),
+        }
+    }
+
+    fn as_http_code(&self) -> u16 {
+        self.kind.as_http_code()
+    }
 }
 
 impl<'a> Srv<'a> {
@@ -107,14 +169,13 @@ impl<'a> Srv<'a> {
         req.respond(resp).expect("error while sending response");
     }
 
-    fn respond_with_error(&self, code: u16, msg: &str, req: tiny_http::Request) {
-        let data = ErrorTemplate {
-            code,
-            msg,
+    fn respond_with_error(&self, err: &Error, req: tiny_http::Request) {
+        let data = ErrorPageTemplate {
+            err
         }.render().unwrap().into_bytes();
         let cur = Cursor::new(data);
         let resp = tiny_http::Response::new(
-            tiny_http::StatusCode(code),
+            tiny_http::StatusCode(err.as_http_code()),
             vec![self.html_content_type.clone()],
             cur, None, None
         );
@@ -145,69 +206,78 @@ impl<'a> Srv<'a> {
             },
             None => {
                 self.respond_with_error(
-                    404, format!("Asset \"{}\" not found", filename).as_ref(),
+                    &Error::new(
+                        ErrorKind::NotFound,
+                        format!("Asset \"{}\" not found", filename)),
                     req);
             },
         }
     }
 
-    fn handle_text(&self, mut req: tiny_http::Request) {
+    fn save_text(&self, req: &mut tiny_http::Request) -> Result<String, Error> {
         if req.method() != &tiny_http::Method::Post {
-            self.respond_with_error(
-                400, "Send POST to this path", req
+            return Err(
+                Error::new(ErrorKind::UserError, "Send POST to this path"),
             );
-            return;
         }
 
         let mut data = Vec::new();
 
-        match req.as_reader().read_to_end(&mut data) {
-            Ok(data) => data,
-            Err(err) => {
-                self.respond_with_error(500, format!("Error receiving the data: {}", err).as_ref(), req);
-                return;
-            }
-        };
+        req.as_reader().read_to_end(&mut data)
+            .map_err( |e| Error::from_io_error(
+                e, "Error receiving the data"))?;
 
         let mut parser = form_urlencoded::parse(data.as_slice());
         let (k, v) = match parser.next() {
             None => {
-                self.respond_with_error(400, "No arguments provided to /text", req);
-                return;
+                return Err(Error::new(
+                    ErrorKind::UserError, "No arguments provided to /text")
+                );
             },
             Some(kv) => kv,
         };
         if k != "text" {
-            self.respond_with_error(400, format!(
-                "Invalid parameter \"{}\" with value \"{}\" ",
-                k, v
-            ).as_ref(), req);
-            return;
+            return Err(Error::new(
+                ErrorKind::UserError,
+                format!(
+                    "Invalid parameter \"{}\" with value \"{}\" ",
+                    k, v)
+            ));
         }
 
         if let Some((k, v)) = parser.next() {
-            self.respond_with_error(400, format!(
-                "Invalid extra parameter \"{}\" with value \"{}\" ",
-                k, v
-            ).as_ref(), req);
-            return;
+            return Err(Error::new(
+                ErrorKind::UserError,
+                format!(
+                    "Invalid extra parameter \"{}\" with value \"{}\" ",
+                    k, v
+                )
+            ));
         }
 
         let mut text = v;
 
-        if let Err(msg) = self.write_text(text.to_mut()) {
-            self.respond_with_error(
-                500, format!("Write error: {}", msg).as_ref(), req
-            );
-            return;
-        }
+        self.write_text(text.to_mut())
+            .map_err( |e| Error::from_io_error(e, "Write error"))?;
 
-        self.respond_with_error(
-            200, format!("Written text: {}", text).as_ref(), req
-        );
+        Ok(format!("Saved text: {}", text))
     }
 
-    fn save_file_from_request(&self, mut req: tiny_http::Request) -> io::Result<()> {
+    fn handle_text(&self, mut req: tiny_http::Request) {
+        match self.save_text(&mut req) {
+            Ok(msg) => {
+                self.respond_with_error(&Error::new(
+                    ErrorKind::Success, msg
+                ), req)
+            },
+            Err(err) => {
+                dbg!(err);
+                todo!()
+            }
+        }
+    }
+
+    fn save_file_from_request(&self, req: &mut tiny_http::Request) -> Result<(), Error> {
         let headers = req.headers();
         let mut content_type: Option<AsciiString> = None;
         for header in headers {
@@ -218,26 +288,27 @@ impl<'a> Srv<'a> {
             }
         }
 
+        dbg!(content_type);
+
         let mut body = Vec::new();
-        req.as_reader().read_to_end(&mut body)?;
+        req.as_reader().read_to_end(&mut body)
+            .map_err(|e| Error::from_io_error(e, "Read reqeust error"))?;
         println!("body:\n{:?}", body);
+        todo!()
     }
 
     fn handle_file_upload(&self, mut req: tiny_http::Request) {
-        match self.save_file_from_request(req) {
+        match self.save_file_from_request(&mut req) {
             Ok(()) => {
                 self.respond_with_error(
-                    200, "TODO: File uploaded!", req
+                    &Error::new(ErrorKind::Success, "TODO: File uploaded!"),
+                    req
                 );
             },
-            Err(msg) => {
-                self.respond_with_error(
-                    500, msg.as_ref(), req
-                );
+            Err(err) => {
+                self.respond_with_error(&err, req);
             }
         }
-
-
     }
 
     fn handle_request(&self, base_url: &Url, req: tiny_http::Request) {
@@ -257,9 +328,8 @@ impl<'a> Srv<'a> {
                     self.handle_static_asset(filename, req);
                 } else {
                     self.respond_with_error(
-                        404, "/assets is not enumeratable",
+                        &Error::new(ErrorKind::NotFound, "/assets is not enumeratable"),
                         req);
-
                 }
             },
             Some("text") => {
@@ -270,8 +340,8 @@ impl<'a> Srv<'a> {
             },
             Some(other) => {
                 self.respond_with_error(
-                    404,
-                    format!("There's nothing at /{}", other).as_ref(),
+                    &Error::new(ErrorKind::NotFound,
+                                format!("There's nothing at /{}", other)),
                     req);
             },
             None => {

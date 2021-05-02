@@ -1,8 +1,1 @@
-<html>
-  <body style="font-size: 48px">
-    Error {{ code }}: {{ msg }}
-
-    <br/>
-    <a href="/">Go back</a>
-  </body>
-</html>
+{{ self.kind.as_http_code() }} ({{ self.kind.description() }}): {{ msg }}
