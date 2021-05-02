@@ -6,8 +6,6 @@ extern crate form_urlencoded;
 extern crate chrono;
 extern crate ascii;
 
-use tiny_http;
-
 // extern crate multipart;
 use multipart::server::{Multipart, SaveResult};
 
@@ -29,6 +27,7 @@ use url::Url;
 use std::io::Cursor;
 
 mod sanitize_filename;
+use sanitize_filename::sanitize_filename;
 
 #[derive(RustEmbed)]
 #[folder = "assets"]
@@ -336,13 +335,19 @@ impl<'a> Srv<'a> {
             let name = &*entry.headers.name.clone();
             if name == "file" {
                 // read file here
-                let file = self.create_file(UploadType::File, entry.headers.filename)
+                let file = self.create_file(
+                    UploadType::File,
+                    entry.headers.filename.map(sanitize_filename))
                     .map_err(|e| Error::from_io_error(e, "create file error"));
-                if file.is_err() {
-                    err = Err(file.unwrap_err());
-                    return;
-                }
-                let file = file.unwrap();
+
+                let file = match file {
+                    Ok(file) => file,
+                    Err(e) => {
+                        err = Err(e);
+                        return;
+                    },
+                };
+
                 let result = entry.data.save().memory_threshold(64*1024*1024).write_to(file);
 
                 match result {
@@ -359,7 +364,6 @@ impl<'a> Srv<'a> {
                             format!("data save error: {}", error)));
                     }
                 }
-                return;
             } else {
                 err = Err(Error::new(
                     ErrorKind::UserError, format!("invalid entry (expected only \"file\") {}", name)));

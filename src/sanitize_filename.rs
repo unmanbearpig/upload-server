@@ -27,7 +27,7 @@ pub fn sanitize_filename<T: AsRef<str>>(filename: T) -> String {
     let mut out: Vec<u8> = Vec::with_capacity(filename.len());
     let mut state = State::Passed;
 
-    for c in filename.into_iter() {
+    for c in filename.iter() {
         let c = *c;
         if is_byte_valid_char(c) {
             out.push(c);
