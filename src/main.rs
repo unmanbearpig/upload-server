@@ -27,6 +27,9 @@ use sanitize_filename::sanitize_filename;
 #[folder = "assets"]
 struct StaticAsset;
 
+mod error;
+use error::{ErrorKind, Error};
+
 const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:2022";
 
 fn content_type_header(value: &str) -> tiny_http::Header {
@@ -39,43 +42,6 @@ struct Srv<'a> {
     html_content_type: tiny_http::Header,
     die_after_single_request: bool,
     output_path: &'a str,
-}
-
-#[derive(Copy, Clone, Debug)]
-enum ErrorKind {
-    Success,
-    ServerError,
-    UserError,
-    NotFound,
-    Unknown,
-}
-
-impl ErrorKind {
-    fn as_http_code(self) -> u16 {
-        match self {
-            ErrorKind::Success => 200,
-            ErrorKind::ServerError => 500,
-            ErrorKind::UserError => 400,
-            ErrorKind::NotFound => 404,
-            ErrorKind::Unknown => 500,
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            ErrorKind::Success => "Success",
-            ErrorKind::ServerError => "Server error",
-            ErrorKind::UserError => "Client error",
-            ErrorKind::NotFound => "Not found",
-            ErrorKind::Unknown => "Unknown",
-        }
-    }
-}
-
-impl fmt::Display for ErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.description())
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -103,38 +69,6 @@ impl UploadType {
 impl fmt::Display for UploadType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())
-    }
-}
-
-#[derive(Debug)]
-struct Error {
-    kind: ErrorKind,
-    msg: String,
-}
-
-impl Error {
-    fn new<T: fmt::Display>(kind: ErrorKind, msg: T) -> Self {
-        Error {
-            kind,
-            msg: msg.to_string(),
-        }
-    }
-
-    fn from_io_error<T: AsRef<str>>(err: io::Error, description: T) -> Self {
-        Error {
-            kind: ErrorKind::ServerError,
-            msg: format!("{}: {}", description.as_ref(), err),
-        }
-    }
-
-    fn as_http_code(&self) -> u16 {
-        self.kind.as_http_code()
-    }
-
-    fn as_html(&self) -> String {
-        format!("{} ({}): {}",
-                self.kind.as_http_code(), self.kind.description(), self.msg)
-
     }
 }
 
