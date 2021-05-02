@@ -315,7 +315,6 @@ impl<'a> Srv<'a> {
         req.foreach_entry(|mut entry| {
             let name = &*entry.headers.name.clone();
             if name == "file" {
-                // read file here
                 let file = self
                     .create_file(
                         UploadType::File,
