@@ -1,12 +1,15 @@
 
 // TODO: add some kind of user agent to the filename
 
-extern crate tiny_http;
 extern crate form_urlencoded;
 extern crate chrono;
 extern crate ascii;
 
-use ascii::{AsciiStr, AsciiString};
+use tiny_http;
+
+// extern crate multipart;
+use multipart::server::{Multipart, SaveResult};
+
 use std::thread;
 use std::time;
 use std::process;
@@ -20,7 +23,6 @@ use askama::Template;
 
 #[macro_use]
 extern crate rust_embed;
-
 
 use url::Url;
 use std::io::Cursor;
@@ -61,6 +63,7 @@ enum ErrorKind {
     ServerError,
     UserError,
     NotFound,
+    Unknown,
 }
 
 impl ErrorKind {
@@ -70,6 +73,7 @@ impl ErrorKind {
             ErrorKind::ServerError => 500,
             ErrorKind::UserError => 400,
             ErrorKind::NotFound => 404,
+            ErrorKind::Unknown => 500,
         }
     }
 
@@ -79,6 +83,7 @@ impl ErrorKind {
             ErrorKind::ServerError => "Server error",
             ErrorKind::UserError => "Client error",
             ErrorKind::NotFound => "Not found",
+            ErrorKind::Unknown => "Unknown",
         }
     }
 }
@@ -86,6 +91,34 @@ impl ErrorKind {
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.description())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum UploadType {
+    Text,
+    File,
+}
+
+impl UploadType {
+    fn name(self) -> &'static str {
+        match self {
+            UploadType::Text => "text",
+            UploadType::File => "file",
+        }
+    }
+
+    fn as_file_suffix(self) -> &'static str {
+        match self {
+            UploadType::Text => "text.txt",
+            UploadType::File => "file.bin",
+        }
+    }
+}
+
+impl fmt::Display for UploadType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name())
     }
 }
 
@@ -139,18 +172,23 @@ impl<'a> Srv<'a> {
         }
     }
 
-    fn write_text(&self, text: &str) -> io::Result<()>  {
-        let filename: String = {
+    fn create_file(&self, typ: UploadType) -> io::Result<fs::File> {
+        let date_str = {
             let now: chrono::DateTime<chrono::Local> = chrono::offset::Local::now();
-            now.format("%F--%T.%f--text.txt").to_string()
+            now.format("%F--%T.%f").to_string()
         };
+
+        let filename = format!("{}--{}", date_str, typ.as_file_suffix());
         let path = path::Path::new(self.output_path).join(filename);
-        let mut file = fs::OpenOptions::new()
+        fs::OpenOptions::new()
             .read(false)
             .write(true)
             .create_new(true)
-            .open(path)?;
+            .open(path)
+    }
 
+    fn write_text(&self, text: &str) -> io::Result<()>  {
+        let mut file = self.create_file(UploadType::Text)?;
         let bytes: &[u8] = text.as_bytes();
         file.write_all(bytes)?;
         Ok(())
@@ -278,23 +316,52 @@ impl<'a> Srv<'a> {
     }
 
     fn save_file_from_request(&self, req: &mut tiny_http::Request) -> Result<(), Error> {
-        let headers = req.headers();
-        let mut content_type: Option<AsciiString> = None;
-        for header in headers {
-            if header.field.as_str() == AsciiStr::from_ascii(b"Content-Type").unwrap() {
-                eprintln!("got Content-Type \"{}\"", header.value);
-                // TODO: probably could get rid of clone
-                content_type = Some(header.value.clone());
+        let mut req = Multipart::from_request(req)
+            .map_err(
+                |e| Error::new(ErrorKind::ServerError, format!("{:?}", e)
+                )
+            )?;
+
+        let mut err: Result<(), Error> =
+            Err(Error::new(ErrorKind::UserError, "no entries provided"));
+        req.foreach_entry(|mut entry| {
+            let name = &*entry.headers.name.clone();
+            if name == "file" {
+                // read file here
+
+                let file = self.create_file(UploadType::File)
+                    .map_err(|e| Error::from_io_error(e, "create file error"));
+                if file.is_err() {
+                    err = Err(file.unwrap_err());
+                    return;
+                }
+                let file = file.unwrap();
+                let result = entry.data.save().memory_threshold(64*1024*1024).write_to(file);
+
+                match result {
+                    SaveResult::Full(_) => {},
+                    SaveResult::Partial(partial, partial_reason) => {
+                        err = Err(Error::new(
+                            ErrorKind::Unknown,
+                            format!("data partially saved/received, partial = {}, partial_reason = {:?}",
+                                    partial, partial_reason)))
+                    },
+                    SaveResult::Error(error) => {
+                        err = Err(Error::new(
+                            ErrorKind::ServerError,
+                            format!("data save error: {}", error)));
+                    }
+                }
+                return;
+            } else {
+                err = Err(Error::new(
+                    ErrorKind::UserError, format!("invalid entry (expected only \"file\") {}", name)));
             }
-        }
+        }).map_err(|e| Error::new(
+            ErrorKind::ServerError,
+            format!("foreach_entry error: {:?}", e)))?;
 
-        dbg!(content_type);
-
-        let mut body = Vec::new();
-        req.as_reader().read_to_end(&mut body)
-            .map_err(|e| Error::from_io_error(e, "Read reqeust error"))?;
-        println!("body:\n{:?}", body);
-        todo!()
+        Ok(())
     }
 
     fn handle_file_upload(&self, mut req: tiny_http::Request) {

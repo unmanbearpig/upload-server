@@ -7,13 +7,14 @@ edition = "2018"
 
 [dependencies]
 
-ascii = "1.0.0"
+ascii = "0.8"
 
 # for generating filenames based on date and time
 chrono = "0.4.19"
 
 # http library
-tiny_http = "0.8.0"
+tiny_http = "0.6.0"
+multipart = { version = "0.17.1", features = ["server", "tiny_http"] }
 
 # templates
 askama = "0.10"
