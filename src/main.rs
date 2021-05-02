@@ -14,8 +14,6 @@ use std::fs;
 use std::io::{self, Write};
 use std::path;
 
-use askama::Template;
-
 #[macro_use]
 extern crate rust_embed;
 
@@ -28,16 +26,6 @@ use sanitize_filename::sanitize_filename;
 #[derive(RustEmbed)]
 #[folder = "assets"]
 struct StaticAsset;
-
-#[derive(Template)]
-#[template(path = "home.html", escape = "none")]
-struct HomeTemplate {}
-
-#[derive(Template)]
-#[template(path = "error_page.html", escape = "none")]
-struct ErrorPageTemplate<'a> {
-    err: &'a Error,
-}
 
 const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:2022";
 
@@ -118,8 +106,7 @@ impl fmt::Display for UploadType {
     }
 }
 
-#[derive(Template, Debug)]
-#[template(path = "error.html", escape = "none")] // TODO: is escape = none safe here?
+#[derive(Debug)]
 struct Error {
     kind: ErrorKind,
     msg: String,
@@ -142,6 +129,12 @@ impl Error {
 
     fn as_http_code(&self) -> u16 {
         self.kind.as_http_code()
+    }
+
+    fn as_html(&self) -> String {
+        format!("{} ({}): {}",
+                self.kind.as_http_code(), self.kind.description(), self.msg)
+
     }
 }
 
@@ -197,21 +190,21 @@ impl<'a> Srv<'a> {
     }
 
     fn handle_home(&self, req: tiny_http::Request) {
-        let data = HomeTemplate {}.render().unwrap().into_bytes();
-        let cur = Cursor::new(data);
-
-        let resp = tiny_http::Response::new(
-            tiny_http::StatusCode(200),
-            vec![self.html_content_type.clone()],
-            cur,
-            None,
-            None,
-        );
-        req.respond(resp).expect("error while sending response");
+        self.handle_static_asset("home.html", req)
     }
 
     fn respond_with_error(&self, err: &Error, req: tiny_http::Request) {
-        let data = ErrorPageTemplate { err }.render().unwrap().into_bytes();
+        let data = format!(r#"
+<html>
+  <body style="font-size: 48px">
+    {}
+
+    <br/>
+    <a href="/">Go back</a>
+  </body>
+</html>
+
+"#, err.as_html()).into_bytes();
         let cur = Cursor::new(data);
         let resp = tiny_http::Response::new(
             tiny_http::StatusCode(err.as_http_code()),
@@ -232,6 +225,7 @@ impl<'a> Srv<'a> {
                 let content_type: &str = match extension {
                     Some("css") => "text/css",
                     Some("js") => "text/javascript",
+                    Some("html") => "text/html",
                     Some(_) => DEFAULT_CONTENT_TYPE,
                     None => DEFAULT_CONTENT_TYPE,
                 };

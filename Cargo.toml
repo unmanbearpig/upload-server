@@ -14,9 +14,6 @@ chrono = "0.4.19"
 tiny_http = "0.6.3"
 multipart = { version = "0.17.1", default_features = false, features = ["server", "tiny_http"] }
 
-# templates
-askama = { version = "0.10", default_features = false }
-
 # static files
 rust-embed = "5.8.0"
 
