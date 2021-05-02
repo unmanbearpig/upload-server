@@ -1,3 +1,4 @@
+#![feature(test)]
 
 // TODO: add some kind of user agent to the filename
 
@@ -26,6 +27,8 @@ extern crate rust_embed;
 
 use url::Url;
 use std::io::Cursor;
+
+mod sanitize_filename;
 
 #[derive(RustEmbed)]
 #[folder = "assets"]
@@ -172,13 +175,18 @@ impl<'a> Srv<'a> {
         }
     }
 
-    fn create_file(&self, typ: UploadType) -> io::Result<fs::File> {
+    fn create_file<T: AsRef<str>>(&self, typ: UploadType, name: Option<T>) -> io::Result<fs::File> {
         let date_str = {
             let now: chrono::DateTime<chrono::Local> = chrono::offset::Local::now();
             now.format("%F--%T.%f").to_string()
         };
 
-        let filename = format!("{}--{}", date_str, typ.as_file_suffix());
+
+        let filename = match name {
+            Some(name) => format!("{}--{}--{}", date_str, name.as_ref(), typ.as_file_suffix()),
+            None => format!("{}--{}", date_str, typ.as_file_suffix()),
+        };
+
         let path = path::Path::new(self.output_path).join(filename);
         fs::OpenOptions::new()
             .read(false)
@@ -188,7 +196,7 @@ impl<'a> Srv<'a> {
     }
 
     fn write_text(&self, text: &str) -> io::Result<()>  {
-        let mut file = self.create_file(UploadType::Text)?;
+        let mut file = self.create_file::<&str>(UploadType::Text, None)?;
         let bytes: &[u8] = text.as_bytes();
         file.write_all(bytes)?;
         Ok(())
@@ -328,8 +336,7 @@ impl<'a> Srv<'a> {
             let name = &*entry.headers.name.clone();
             if name == "file" {
                 // read file here
-
-                let file = self.create_file(UploadType::File)
+                let file = self.create_file(UploadType::File, entry.headers.filename)
                     .map_err(|e| Error::from_io_error(e, "create file error"));
                 if file.is_err() {
                     err = Err(file.unwrap_err());
