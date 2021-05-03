@@ -111,11 +111,11 @@ impl<'a> Srv<'a> {
         Ok(())
     }
 
-    fn handle_home(&self, req: tiny_http::Request) {
-        self.handle_static_asset("home.html", req)
+    fn handle_home(&self) -> Result<tiny_http::Response<Cursor<Vec<u8>>>, Error> {
+        self.handle_static_asset("home.html")
     }
 
-    fn respond_with_error(&self, err: &Error, req: tiny_http::Request) {
+    fn error_response(&self, err: &Error) -> tiny_http::Response<Cursor<Vec<u8>>> {
         let data = format!(
             r#"
 <html>
@@ -127,59 +127,52 @@ impl<'a> Srv<'a> {
   </body>
 </html>
 
-"#,
-            err.as_html()
-        )
-        .into_bytes();
+"#, err.as_html()).into_bytes();
         let cur = Cursor::new(data);
-        let resp = tiny_http::Response::new(
+        tiny_http::Response::new(
             tiny_http::StatusCode(err.as_http_code()),
             vec![self.html_content_type.clone()],
             cur,
             None,
             None,
-        );
-        req.respond(resp).expect("error while sending response");
+        )
     }
 
-    fn handle_static_asset(&self, filename: &str, req: tiny_http::Request) {
-        match StaticAsset::get(filename) {
-            Some(content) => {
-                let extension: Option<&str> = filename.split('.').last();
+    fn handle_static_asset(&self, filename: &str) ->
+        Result<tiny_http::Response<Cursor<Vec<u8>>>, Error> {
+            match StaticAsset::get(filename) {
+                Some(content) => {
+                    let extension: Option<&str> = filename.split('.').last();
 
-                const DEFAULT_CONTENT_TYPE: &str = "text/plain";
-                let content_type: &str = match extension {
-                    Some("css") => "text/css",
-                    Some("js") => "text/javascript",
-                    Some("html") => "text/html",
-                    Some(_) => DEFAULT_CONTENT_TYPE,
-                    None => DEFAULT_CONTENT_TYPE,
-                };
-                let content_type = content_type_header(content_type);
-                let cur = Cursor::new(content);
+                    const DEFAULT_CONTENT_TYPE: &str = "text/plain";
+                    let content_type: &str = match extension {
+                        Some("css") => "text/css",
+                        Some("js") => "text/javascript",
+                        Some("html") => "text/html",
+                        Some(_) => DEFAULT_CONTENT_TYPE,
+                        None => DEFAULT_CONTENT_TYPE,
+                    };
+                    let content = content.into_owned(); // there must be a better way
+                    let content_type = content_type_header(content_type);
+                    let cur = Cursor::new(content);
 
-                let resp = tiny_http::Response::new(
-                    tiny_http::StatusCode(200),
-                    vec![content_type],
-                    cur,
-                    None,
-                    None,
-                );
-                if let Err(e) = req.respond(resp) {
-                    println!("error while sending asset \"{}\" repsonse: {:?}", filename, e);
+
+                    Ok(tiny_http::Response::new(
+                        tiny_http::StatusCode(200),
+                        vec![content_type],
+                        cur,
+                        None,
+                        None,
+                    ))
                 }
-            }
-            None => {
-                self.respond_with_error(
-                    &Error::new(
+                None => {
+                    Err(Error::new(
                         ErrorKind::NotFound,
                         format!("Asset \"{}\" not found", filename),
-                    ),
-                    req,
-                );
+                    ))
+                }
             }
         }
-    }
 
     fn save_text(&self, req: &mut tiny_http::Request) -> Result<String, Error> {
         if req.method() != &tiny_http::Method::Post {
@@ -224,12 +217,12 @@ impl<'a> Srv<'a> {
         Ok(format!("Saved text: {}", text))
     }
 
-    fn handle_text(&self, mut req: tiny_http::Request) {
-        match self.save_text(&mut req) {
-            Ok(msg) => self.respond_with_error(&Error::new(ErrorKind::Success, msg), req),
+    fn handle_text(&self,  req: &mut tiny_http::Request) -> Result<tiny_http::Response<Cursor<Vec<u8>>>, Error> {
+        match self.save_text(req) {
+            Ok(msg) => Err(Error::new(ErrorKind::Success, msg)),
             Err(err) => {
-                dbg!(err);
-                todo!()
+                Err(Error::new(ErrorKind::ServerError,
+                               format!("save text error: {:?}", err)))
             }
         }
     }
@@ -270,9 +263,9 @@ impl<'a> Srv<'a> {
                         err = Err(Error::new(
                             ErrorKind::Unknown,
                             format!(
-                            "data partially saved/received, partial = {}, partial_reason = {:?}",
-                            partial, partial_reason
-                        ),
+                                "data partially saved/received, partial = {}, partial_reason = {:?}",
+                                partial, partial_reason
+                            ),
                         ))
                     }
                     SaveResult::Error(error) => {
@@ -289,36 +282,68 @@ impl<'a> Srv<'a> {
                 ));
             }
         })
-        .map_err(|e| {
-            Error::new(
-                ErrorKind::ServerError,
-                format!("foreach_entry error: {:?}", e),
-            )
-        })?;
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::ServerError,
+                    format!("foreach_entry error: {:?}", e),
+                )
+            })?;
 
         Ok(())
     }
 
-    fn handle_file_upload(&self, mut req: tiny_http::Request) {
-        match self.save_file_from_request(&mut req) {
+    fn handle_file_upload(&self, req: &mut tiny_http::Request) -> Result<tiny_http::Response<Cursor<Vec<u8>>>, Error> {
+        match self.save_file_from_request(req) {
             Ok(()) => {
-                self.respond_with_error(
-                    &Error::new(ErrorKind::Success, "TODO: File uploaded!"),
-                    req,
-                );
+                Err(Error::new(ErrorKind::Success, "File uploaded!"))
             }
             Err(err) => {
-                self.respond_with_error(&err, req);
+                Err(err)
             }
         }
     }
 
-    fn handle_request(&self, base_url: &Url, req: tiny_http::Request) {
+    fn respond(&self, start_t: time::Instant,
+               req: tiny_http::Request,
+               resp_result: Result<tiny_http::Response<Cursor<Vec<u8>>>, Error>) {
+
+        let method = req.method().clone();
+        let url = req.url().to_string();
+
+        let resp: tiny_http::Response<Cursor<Vec<u8>>> = match resp_result {
+            Ok(resp) => resp,
+            Err(err) => self.error_response(&err),
+        };
+
+        let make_resp_dur = start_t.elapsed();
+        let respond_result = req.respond(resp);
+        let resp_complete_dur = start_t.elapsed();
+
+        match respond_result {
+            Ok(()) => {
+                println!(
+                    "{:6} [{:8} us, {:8} us] (Ok)  {}",
+                    method.as_str(), make_resp_dur.as_micros(), resp_complete_dur.as_micros(), url);
+
+            },
+            Err(err) => {
+                println!(
+                    "{:6} [{:8} us, {:8} us] {} => {:?}",
+                    method.as_str(), make_resp_dur.as_micros(), resp_complete_dur.as_micros(), url, err);
+            }
+        }
+    }
+
+    fn handle_request(&self, base_url: &Url, mut req: tiny_http::Request) {
+        let start_t = time::Instant::now();
+
         self.die_if_single_request();
 
         let url = req.url();
+
         if url == "/" {
-            return self.handle_home(req);
+            self.respond(start_t, req, self.handle_home());
+            return;
         }
 
         let url = base_url.join(url).unwrap();
@@ -327,31 +352,31 @@ impl<'a> Srv<'a> {
         match path_segments.next() {
             Some("assets") => {
                 if let Some(filename) = path_segments.next() {
-                    self.handle_static_asset(filename, req);
+                    self.respond(start_t, req, self.handle_static_asset(filename));
                 } else {
-                    self.respond_with_error(
-                        &Error::new(ErrorKind::NotFound, "/assets is not enumeratable"),
-                        req,
-                    );
+                    self.respond(start_t, req, Err(
+                        Error::new(ErrorKind::NotFound, "/assets is not enumeratable")
+                    ));
                 }
             }
             Some("text") => {
-                self.handle_text(req);
+                let resp = self.handle_text(&mut req);
+                self.respond(start_t, req, resp);
             }
             Some("file") => {
-                self.handle_file_upload(req);
+                let resp = self.handle_file_upload(&mut req);
+                self.respond(start_t, req, resp);
             }
             Some(other) => {
-                self.respond_with_error(
-                    &Error::new(
+                self.respond(
+                    start_t, req,
+                    Err(Error::new(
                         ErrorKind::NotFound,
                         format!("There's nothing at /{}", other),
-                    ),
-                    req,
-                );
+                    )));
             }
             None => {
-                panic!(
+                unreachable!(
                     "first URL path segment is none but we also didn't handle home, \
                      which should never happen. It's a programmer's error."
                 );
