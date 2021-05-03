@@ -165,7 +165,9 @@ impl<'a> Srv<'a> {
                     None,
                     None,
                 );
-                req.respond(resp).expect("error while sending response");
+                if let Err(e) = req.respond(resp) {
+                    println!("error while sending asset \"{}\" repsonse: {:?}", filename, e);
+                }
             }
             None => {
                 self.respond_with_error(
