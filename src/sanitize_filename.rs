@@ -4,15 +4,15 @@ enum State {
 }
 
 fn is_byte_valid_char(c: u8) -> bool {
-    if c >= b'a' && c <= b'z' {
+    if (b'a'..=b'z').contains(&c) {
         return true;
     }
 
-    if c >= b'A' && c <= b'Z' {
+    if (b'A'..=b'Z').contains(&c) {
         return true;
     }
 
-    if c >= b'0' && c <= b'9' {
+    if (b'0'..=b'9').contains(&c) {
         return true;
     }
 
