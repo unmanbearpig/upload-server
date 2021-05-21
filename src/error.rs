@@ -52,7 +52,8 @@ impl Error {
         }
     }
 
-    pub fn from_io_error<T: AsRef<str>>(err: io::Error, description: T) -> Self {
+    pub fn from_io_error<T: AsRef<str>>(err: io::Error, description: T)
+                                        -> Self {
         Error {
             kind: ErrorKind::ServerError,
             msg: format!("{}: {}", description.as_ref(), err),

@@ -46,8 +46,9 @@ arguments:
                     uploads_dir = Some(uploads_path_arg);
                 },
                 other => {
-                    return Err(Error::new(ErrorKind::UserError,
-                                          format!("Invalid argument \"{}\"", other)));
+                    return Err(
+                        Error::new(ErrorKind::UserError,
+                                   format!("Invalid argument \"{}\"", other)));
                 }
             }
         }
@@ -61,7 +62,8 @@ arguments:
             }
         };
 
-        let listen_addr = listen_addr.unwrap_or_else(|| DEFAULT_LISTEN_ADDR.to_string());
+        let listen_addr = listen_addr
+            .unwrap_or_else(|| DEFAULT_LISTEN_ADDR.to_string());
 
         Ok(Config {
             listen_addr, uploads_dir
@@ -69,12 +71,15 @@ arguments:
     }
 
     pub fn make_server(&self) -> srv::Srv {
-        let http = match tiny_http::Server::http::<&str>(self.listen_addr.as_ref()) {
+        let srv = tiny_http::Server::http::<&str>(self.listen_addr.as_ref());
+        let http = match srv {
             Ok(http) => http,
             Err(e) => panic!("http start error: {:?}", e),
         };
 
-        let base_url = Url::parse(format!("http://{}", self.listen_addr).as_ref()).unwrap();
+        let base_url =
+            Url::parse(format!("http://{}", self.listen_addr).as_ref())
+            .unwrap();
 
         srv::Srv::new(http, base_url, self.uploads_dir.as_ref())
     }

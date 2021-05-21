@@ -18,6 +18,8 @@ use crate::sanitize_filename::sanitize_filename;
 #[folder = "assets"]
 struct StaticAsset;
 
+type BinaryResponse = tiny_http::Response<Cursor<Vec<u8>>>;
+
 use crate::error::{Error, ErrorKind};
 
 fn content_type_header(value: &str) -> tiny_http::Header {
@@ -61,7 +63,8 @@ impl fmt::Display for UploadType {
 }
 
 impl<'a> Srv<'a> {
-    pub fn new(http: tiny_http::Server, base_url: Url, output_path: &'a str) -> Self {
+    pub fn new(http: tiny_http::Server, base_url: Url, output_path: &'a str)
+               -> Self {
         Srv {
             http,
             base_url,
@@ -76,7 +79,8 @@ impl<'a> Srv<'a> {
             // die after a few ms to be restarted by bash script
             //   so we have a new recompiled binary for the next request
             thread::spawn(move || {
-                // Give us and the browser some time to fetch assets for the page
+                // Give us and the browser some time to fetch assets
+                // for the page
                 thread::sleep(time::Duration::from_millis(150));
 
                 println!("Handled only one request for debugging. Quitting.");
@@ -85,14 +89,18 @@ impl<'a> Srv<'a> {
         }
     }
 
-    fn create_file<T: AsRef<str>>(&self, typ: UploadType, name: Option<T>) -> io::Result<fs::File> {
+    fn create_file<T: AsRef<str>>(&self, typ: UploadType, name: Option<T>)
+                                  -> io::Result<fs::File> {
         let date_str = {
-            let now: chrono::DateTime<chrono::Local> = chrono::offset::Local::now();
+            let now: chrono::DateTime<chrono::Local> =
+                chrono::offset::Local::now();
             now.format("%F--%T.%f").to_string()
         };
 
         let filename = match name {
-            Some(name) => format!("{}--{}--{}", date_str, name.as_ref(), typ.as_file_suffix()),
+            Some(name) => format!(
+                "{}--{}--{}",
+                date_str, name.as_ref(), typ.as_file_suffix()),
             None => format!("{}--{}", date_str, typ.as_file_suffix()),
         };
 
@@ -111,11 +119,11 @@ impl<'a> Srv<'a> {
         Ok(())
     }
 
-    fn handle_home(&self) -> Result<tiny_http::Response<Cursor<Vec<u8>>>, Error> {
+    fn handle_home(&self) -> Result<BinaryResponse, Error> {
         self.handle_static_asset("home.html")
     }
 
-    fn error_response(&self, err: &Error) -> tiny_http::Response<Cursor<Vec<u8>>> {
+    fn error_response(&self, err: &Error) -> BinaryResponse {
         let data = format!(
             r#"
 <html>
@@ -138,8 +146,8 @@ impl<'a> Srv<'a> {
         )
     }
 
-    fn handle_static_asset(&self, filename: &str) ->
-        Result<tiny_http::Response<Cursor<Vec<u8>>>, Error> {
+    fn handle_static_asset(&self, filename: &str)
+                           -> Result<BinaryResponse, Error> {
             match StaticAsset::get(filename) {
                 Some(content) => {
                     let extension: Option<&str> = filename.split('.').last();
@@ -152,7 +160,8 @@ impl<'a> Srv<'a> {
                         Some(_) => DEFAULT_CONTENT_TYPE,
                         None => DEFAULT_CONTENT_TYPE,
                     };
-                    let content = content.into_owned(); // there must be a better way
+                    // there must be a better way
+                    let content = content.into_owned();
                     let content_type = content_type_header(content_type);
                     let cur = Cursor::new(content);
 
@@ -176,7 +185,8 @@ impl<'a> Srv<'a> {
 
     fn save_text(&self, req: &mut tiny_http::Request) -> Result<String, Error> {
         if req.method() != &tiny_http::Method::Post {
-            return Err(Error::new(ErrorKind::UserError, "Send POST to this path"));
+            return Err(Error::new(
+                ErrorKind::UserError, "Send POST to this path"));
         }
 
         let mut data = Vec::new();
@@ -205,7 +215,8 @@ impl<'a> Srv<'a> {
         if let Some((k, v)) = parser.next() {
             return Err(Error::new(
                 ErrorKind::UserError,
-                format!("Invalid extra parameter \"{}\" with value \"{}\" ", k, v),
+                format!("Invalid extra parameter \"{}\" with value \"{}\" ",
+                        k, v),
             ));
         }
 
@@ -217,7 +228,8 @@ impl<'a> Srv<'a> {
         Ok(format!("Saved text: {}", text))
     }
 
-    fn handle_text(&self,  req: &mut tiny_http::Request) -> Result<tiny_http::Response<Cursor<Vec<u8>>>, Error> {
+    fn handle_text(&self,  req: &mut tiny_http::Request)
+                   -> Result<BinaryResponse, Error> {
         match self.save_text(req) {
             Ok(msg) => Err(Error::new(ErrorKind::Success, msg)),
             Err(err) => {
@@ -227,9 +239,11 @@ impl<'a> Srv<'a> {
         }
     }
 
-    fn save_file_from_request(&self, req: &mut tiny_http::Request) -> Result<(), Error> {
+    fn save_file_from_request(&self, req: &mut tiny_http::Request)
+                              -> Result<(), Error> {
         let mut req = Multipart::from_request(req)
-            .map_err(|e| Error::new(ErrorKind::ServerError, format!("{:?}", e)))?;
+            .map_err(|e| Error::new(ErrorKind::ServerError,
+                                    format!("{:?}", e)))?;
 
         let mut err: Result<(), Error> =
             Err(Error::new(ErrorKind::UserError, "no entries provided"));
@@ -263,9 +277,8 @@ impl<'a> Srv<'a> {
                         err = Err(Error::new(
                             ErrorKind::Unknown,
                             format!(
-                                "data partially saved/received, partial = {}, partial_reason = {:?}",
-                                partial, partial_reason
-                            ),
+                                "data partially saved/received, partial = {}, \
+partial_reason = {:?}", partial, partial_reason),
                         ))
                     }
                     SaveResult::Error(error) => {
@@ -281,18 +294,18 @@ impl<'a> Srv<'a> {
                     format!("invalid entry (expected only \"file\") {}", name),
                 ));
             }
-        })
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::ServerError,
-                    format!("foreach_entry error: {:?}", e),
-                )
-            })?;
+        }).map_err(|e| {
+            Error::new(
+                ErrorKind::ServerError,
+                format!("foreach_entry error: {:?}", e),
+            )
+        })?;
 
         Ok(())
     }
 
-    fn handle_file_upload(&self, req: &mut tiny_http::Request) -> Result<tiny_http::Response<Cursor<Vec<u8>>>, Error> {
+    fn handle_file_upload(&self, req: &mut tiny_http::Request) ->
+        Result<BinaryResponse, Error> {
         match self.save_file_from_request(req) {
             Ok(()) => {
                 Err(Error::new(ErrorKind::Success, "File uploaded!"))
@@ -305,12 +318,12 @@ impl<'a> Srv<'a> {
 
     fn respond(&self, start_t: time::Instant,
                req: tiny_http::Request,
-               resp_result: Result<tiny_http::Response<Cursor<Vec<u8>>>, Error>) {
+               resp_result: Result<BinaryResponse, Error>) {
 
         let method = req.method().clone();
         let url = req.url().to_string();
 
-        let resp: tiny_http::Response<Cursor<Vec<u8>>> = match resp_result {
+        let resp: BinaryResponse = match resp_result {
             Ok(resp) => resp,
             Err(err) => self.error_response(&err),
         };
