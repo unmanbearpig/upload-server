@@ -1,6 +1,28 @@
 use std::fmt;
 use std::io;
 
+#[derive(Debug)]
+pub struct WhateverError(pub String);
+
+impl std::fmt::Display for WhateverError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        write!(f, "{}", self.0)
+    }
+}
+impl std::error::Error for WhateverError {}
+
+impl From<&str> for WhateverError {
+    fn from(s: &str) -> WhateverError {
+        WhateverError(s.to_string())
+    }
+}
+
+impl From<String> for WhateverError {
+    fn from(s: String) -> WhateverError {
+        WhateverError(s)
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum ErrorKind {
     Success,

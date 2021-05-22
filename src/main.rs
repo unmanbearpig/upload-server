@@ -21,10 +21,13 @@ fn main() {
     let config = match config {
         Ok(config) => config,
         Err(e) => {
-            eprintln!("{}", e.msg);
+            eprintln!("{}", e);
             return;
         }
     };
     let mut srv = config.make_server();
+
+    println!("Listening at {}, upload directiory: {}, name is {}",
+             config.listen_addr, config.uploads_dir, config.send_to_name);
     srv.run();
 }

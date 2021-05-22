@@ -9,6 +9,7 @@ use url::Url;
 use std::process;
 use std::thread;
 use std::time;
+use std::borrow::Cow;
 
 use multipart::server::{Multipart, SaveResult};
 
@@ -18,26 +19,42 @@ use crate::sanitize_filename::sanitize_filename;
 #[folder = "assets"]
 struct StaticAsset;
 
-type BinaryResponse = tiny_http::Response<Cursor<Vec<u8>>>;
-
 use crate::error::{Error, ErrorKind};
 
 fn content_type_header(value: &str) -> tiny_http::Header {
     tiny_http::Header::from_bytes(&b"Content-Type"[..], value).unwrap()
 }
 
-pub struct Srv<'a> {
+pub struct Srv<'a, 'b> {
     http: tiny_http::Server,
     base_url: Url,
     html_content_type: tiny_http::Header,
     die_after_single_request: bool,
     output_path: &'a str,
+    send_to_name: &'b str,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum UploadType {
     Text,
     File,
+}
+
+/// Replaces all occurances of `search_for` with `replace_with` and returns
+/// new Vec leaving the original unchanged.
+/// Assumes all arguments are valid UTF-8.
+/// Probably should do the conversion outside of it.
+/// It's a shitty implementation since it allocates a new string and copies it
+/// back to the original string (or Vec I should say), which is avoidable,
+/// but I'm lazy at the moment.
+unsafe fn search_and_replace(content: Vec<u8>,
+                             search_for: &[u8],
+                             replace_with: &[u8]) -> Vec<u8> {
+    let search_for = std::str::from_utf8_unchecked(search_for);
+    let replace_with = std::str::from_utf8_unchecked(replace_with);
+    let content: String = String::from_utf8_unchecked(content);
+    let newstr = content.replace(search_for, replace_with);
+    newstr.into_bytes()
 }
 
 impl UploadType {
@@ -62,8 +79,25 @@ impl fmt::Display for UploadType {
     }
 }
 
-impl<'a> Srv<'a> {
-    pub fn new(http: tiny_http::Server, base_url: Url, output_path: &'a str)
+fn filename_to_content_type<T: AsRef<str>>(filename: T) -> &'static str {
+    let filename = filename.as_ref();
+    let extension: Option<&str> = filename.split('.').last();
+
+    const DEFAULT_CONTENT_TYPE: &str = "text/plain";
+    match extension {
+        Some("css") => "text/css",
+        Some("js") => "text/javascript",
+        Some("html") => "text/html",
+        Some(_) => DEFAULT_CONTENT_TYPE,
+        None => DEFAULT_CONTENT_TYPE,
+    }
+}
+
+impl<'a, 'b> Srv<'a, 'b> {
+    pub fn new(http: tiny_http::Server,
+               base_url: Url,
+               output_path: &'a str,
+               send_to_name: &'b str)
                -> Self {
         Srv {
             http,
@@ -71,6 +105,7 @@ impl<'a> Srv<'a> {
             html_content_type: content_type_header("text/html"),
             die_after_single_request: false,
             output_path,
+            send_to_name,
         }
     }
 
@@ -119,11 +154,36 @@ impl<'a> Srv<'a> {
         Ok(())
     }
 
-    fn handle_home(&self) -> Result<BinaryResponse, Error> {
-        self.handle_static_asset("home.html")
-    }
+    // TODO cache the content with replaced name
+    fn handle_home(&self) ->
+        Result<tiny_http::Response<Cursor<Cow<[u8]>>>, Error>
+    {
+        const HOME_FILENAME: &str = "home.html";
+        let content = StaticAsset::get("home.html")
+            .ok_or_else(|| Error::new(
+                ErrorKind::ServerError,
+                format!("Home: {} not found", HOME_FILENAME)))?;
 
-    fn error_response(&self, err: &Error) -> BinaryResponse {
+        let content = content.into_owned();
+
+        let content = unsafe {
+            search_and_replace(
+                content, b"#{name}", self.send_to_name.as_bytes())
+        };
+        let content = Cow::from(content);
+
+        let content_type = content_type_header("text/html");
+        let cur = Cursor::new(content);
+
+        Ok(tiny_http::Response::new(
+            tiny_http::StatusCode(200),
+            vec![content_type],
+            cur,
+            None,
+            None,
+        ))}
+
+    fn error_response(&self, err: &Error) -> tiny_http::Response<Cursor<Cow<[u8]>>> {
         let data = format!(
             r#"
 <html>
@@ -136,7 +196,7 @@ impl<'a> Srv<'a> {
 </html>
 
 "#, err.as_html()).into_bytes();
-        let cur = Cursor::new(data);
+        let cur = Cursor::new(Cow::from(data));
         tiny_http::Response::new(
             tiny_http::StatusCode(err.as_http_code()),
             vec![self.html_content_type.clone()],
@@ -146,42 +206,35 @@ impl<'a> Srv<'a> {
         )
     }
 
-    fn handle_static_asset(&self, filename: &str)
-                           -> Result<BinaryResponse, Error> {
-            match StaticAsset::get(filename) {
-                Some(content) => {
-                    let extension: Option<&str> = filename.split('.').last();
+    fn handle_static_asset(&self, filename: &str) ->
+        Result<tiny_http::Response<Cursor<Cow<[u8]>>>, Error>
+    {
+        match StaticAsset::get(filename) {
+            Some(content) => {
+                let content_type = filename_to_content_type(filename);
 
-                    const DEFAULT_CONTENT_TYPE: &str = "text/plain";
-                    let content_type: &str = match extension {
-                        Some("css") => "text/css",
-                        Some("js") => "text/javascript",
-                        Some("html") => "text/html",
-                        Some(_) => DEFAULT_CONTENT_TYPE,
-                        None => DEFAULT_CONTENT_TYPE,
-                    };
-                    // there must be a better way
-                    let content = content.into_owned();
-                    let content_type = content_type_header(content_type);
-                    let cur = Cursor::new(content);
+                // there must be a better way
+                let content = Cow::from(content);
+                let content_type = content_type_header(content_type);
 
+                let cur = Cursor::new(content);
 
-                    Ok(tiny_http::Response::new(
-                        tiny_http::StatusCode(200),
-                        vec![content_type],
-                        cur,
-                        None,
-                        None,
-                    ))
-                }
-                None => {
-                    Err(Error::new(
-                        ErrorKind::NotFound,
-                        format!("Asset \"{}\" not found", filename),
-                    ))
-                }
+                Ok(tiny_http::Response::new(
+                    tiny_http::StatusCode(200),
+                    vec![content_type],
+                    cur,
+                    None,
+                    None,
+                ))
+            }
+            None => {
+                Err(Error::new(
+                    ErrorKind::NotFound,
+                    format!("Asset \"{}\" not found", filename),
+                ))
             }
         }
+    }
 
     fn save_text(&self, req: &mut tiny_http::Request) -> Result<String, Error> {
         if req.method() != &tiny_http::Method::Post {
@@ -229,7 +282,7 @@ impl<'a> Srv<'a> {
     }
 
     fn handle_text(&self,  req: &mut tiny_http::Request)
-                   -> Result<BinaryResponse, Error> {
+                   -> Result<tiny_http::Response<Cursor<Cow<[u8]>>>, Error> {
         match self.save_text(req) {
             Ok(msg) => Err(Error::new(ErrorKind::Success, msg)),
             Err(err) => {
@@ -278,7 +331,7 @@ impl<'a> Srv<'a> {
                             ErrorKind::Unknown,
                             format!(
                                 "data partially saved/received, partial = {}, \
-partial_reason = {:?}", partial, partial_reason),
+                                 partial_reason = {:?}", partial, partial_reason),
                         ))
                     }
                     SaveResult::Error(error) => {
@@ -305,25 +358,25 @@ partial_reason = {:?}", partial, partial_reason),
     }
 
     fn handle_file_upload(&self, req: &mut tiny_http::Request) ->
-        Result<BinaryResponse, Error> {
-        match self.save_file_from_request(req) {
-            Ok(()) => {
-                Err(Error::new(ErrorKind::Success, "File uploaded!"))
-            }
-            Err(err) => {
-                Err(err)
+        Result<tiny_http::Response<Cursor<Cow<[u8]>>>, Error> {
+            match self.save_file_from_request(req) {
+                Ok(()) => {
+                    Err(Error::new(ErrorKind::Success, "File uploaded!"))
+                }
+                Err(err) => {
+                    Err(err)
+                }
             }
         }
-    }
 
     fn respond(&self, start_t: time::Instant,
                req: tiny_http::Request,
-               resp_result: Result<BinaryResponse, Error>) {
+               resp_result: Result<tiny_http::Response<Cursor<Cow<[u8]>>>, Error>) {
 
         let method = req.method().clone();
         let url = req.url().to_string();
 
-        let resp: BinaryResponse = match resp_result {
+        let resp: tiny_http::Response<Cursor<Cow<[u8]>>> = match resp_result {
             Ok(resp) => resp,
             Err(err) => self.error_response(&err),
         };
@@ -398,7 +451,6 @@ partial_reason = {:?}", partial, partial_reason),
     }
 
     pub fn run(&mut self) {
-        println!("running...");
         loop {
             let req = match self.http.recv() {
                 Ok(req) => req,
