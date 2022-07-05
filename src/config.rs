@@ -10,9 +10,17 @@ const DEFAULT_UPLOADS_DIR: &str = "/var/upload-server/uploads";
 const DEFAULT_SEND_TO_NAME: &str = "Anonymousse";
 
 pub struct Config {
+    /// Listen on this address
     pub listen_addr:   String,
+
+    /// Where we should store the files
     pub uploads_dir:   String,
+
+    /// Print this name on the page
     pub send_to_name:  String,
+
+    /// Whether we should also store the metadata, like
+    /// request headers and stuff
     pub save_metadata: bool,
 }
 
@@ -125,8 +133,6 @@ impl Config {
         srv::Srv::new(
             http,
             base_url,
-            self.uploads_dir.as_ref(),
-            self.send_to_name.as_ref(),
-            self.save_metadata)
+            self)
     }
 }

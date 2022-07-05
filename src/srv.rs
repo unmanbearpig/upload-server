@@ -11,6 +11,8 @@ use std::thread;
 use std::time;
 use std::borrow::Cow;
 
+use crate::config;
+
 use multipart::server::{Multipart, SaveResult};
 
 use crate::sanitize_filename::sanitize_filename;
@@ -25,16 +27,13 @@ fn content_type_header(value: &str) -> tiny_http::Header {
     tiny_http::Header::from_bytes(&b"Content-Type"[..], value).unwrap()
 }
 
-pub struct Srv<'a, 'b> {
+pub struct Srv<'config> {
     http: tiny_http::Server,
     base_url: Url,
     html_content_type: tiny_http::Header,
     die_after_single_request: bool,
-    output_path: &'a str,
-    send_to_name: &'b str,
 
-    /// Also create metadata files
-    save_metadata: bool,
+    config: &'config config::Config,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -129,21 +128,17 @@ fn mangle_filename<T: AsRef<str>>(
     }
 }
 
-impl<'a, 'b> Srv<'a, 'b> {
+impl<'config> Srv<'config> {
     pub fn new(http: tiny_http::Server,
                base_url: Url,
-               output_path: &'a str,
-               send_to_name: &'b str,
-               save_metadata: bool)
+               config: &'config config::Config)
                -> Self {
         Srv {
             http,
             base_url,
             html_content_type: content_type_header("text/html"),
             die_after_single_request: false,
-            output_path,
-            send_to_name,
-            save_metadata,
+            config,
         }
     }
 
@@ -168,7 +163,7 @@ impl<'a, 'b> Srv<'a, 'b> {
         file_type: FileType, name: Option<T>) -> io::Result<fs::File>
     {
         let filename = mangle_filename(now, typ, file_type, name);
-        let path = path::Path::new(self.output_path).join(filename);
+        let path = path::Path::new(&self.config.uploads_dir).join(filename);
         fs::OpenOptions::new()
             .read(false)
             .write(true)
@@ -202,7 +197,7 @@ impl<'a, 'b> Srv<'a, 'b> {
 
         let content = unsafe {
             search_and_replace(
-                content, b"#{name}", self.send_to_name.as_bytes())
+                content, b"#{name}", self.config.send_to_name.as_bytes())
         };
         let content = Cow::from(content);
 
@@ -275,7 +270,7 @@ impl<'a, 'b> Srv<'a, 'b> {
         upload_type: UploadType, name: Option<S>,
         req: &tiny_http::Request) -> Result<(), Error>
     {
-        if !self.save_metadata {
+        if !self.config.save_metadata {
             return Ok(())
         }
 
