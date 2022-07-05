@@ -10,9 +10,10 @@ const DEFAULT_UPLOADS_DIR: &str = "/var/upload-server/uploads";
 const DEFAULT_SEND_TO_NAME: &str = "Anonymousse";
 
 pub struct Config {
-    pub listen_addr: String,
-    pub uploads_dir: String,
-    pub send_to_name: String,
+    pub listen_addr:   String,
+    pub uploads_dir:   String,
+    pub send_to_name:  String,
+    pub save_metadata: bool,
 }
 
 type Error = Box<dyn std::error::Error>;
@@ -45,6 +46,7 @@ arguments:
                         default is {default_uploads_dir}
   --name NAME        -- Say that name on the home page
                         default is {default_name}
+  --save-meta        -- Also create metadata files
 "#, default_listen_addr = DEFAULT_LISTEN_ADDR,
              default_uploads_dir = DEFAULT_UPLOADS_DIR,
              default_name = DEFAULT_SEND_TO_NAME,
@@ -57,6 +59,7 @@ impl Config {
         let mut listen_addr: Option<String> = None;
         let mut uploads_dir: Option<String> = None;
         let mut send_to_name: String = DEFAULT_SEND_TO_NAME.to_string();
+        let mut save_metadata: bool = false;
 
         while let Some(arg) = args.next() {
             match arg.as_ref() {
@@ -81,7 +84,8 @@ impl Config {
                         .ok_or_else(|| WhateverError::from(
                             "Missing argument to --name"))?;
                     send_to_name = name;
-                }
+                },
+                "--save-meta" => save_metadata = true,
                 other => {
                     return Err(
                         format!("Invalid argument \"{}\"", other).into());
@@ -104,7 +108,7 @@ impl Config {
         let listen_addr = listen_addr
             .unwrap_or_else(|| DEFAULT_LISTEN_ADDR.to_string());
 
-        Ok(Config { listen_addr, uploads_dir, send_to_name })
+        Ok(Config { listen_addr, uploads_dir, send_to_name, save_metadata })
     }
 
     pub fn make_server(&self) -> srv::Srv {
@@ -122,6 +126,7 @@ impl Config {
             http,
             base_url,
             self.uploads_dir.as_ref(),
-            self.send_to_name.as_ref())
+            self.send_to_name.as_ref(),
+            self.save_metadata)
     }
 }

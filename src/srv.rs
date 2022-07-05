@@ -32,6 +32,9 @@ pub struct Srv<'a, 'b> {
     die_after_single_request: bool,
     output_path: &'a str,
     send_to_name: &'b str,
+
+    /// Also create metadata files
+    save_metadata: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -93,11 +96,45 @@ fn filename_to_content_type<T: AsRef<str>>(filename: T) -> &'static str {
     }
 }
 
+/// A type of file that we store on the filesystem
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum FileType {
+    Payload,
+    Metadata,
+}
+
+impl fmt::Display for FileType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FileType::Payload  => write!(f, "payload"),
+            FileType::Metadata => write!(f, "metadata"),
+        }
+    }
+
+}
+
+fn mangle_filename<T: AsRef<str>>(
+    now: chrono::DateTime<chrono::Local>,
+    typ: UploadType, file_type: FileType,
+    name: Option<T>) -> String
+{
+    let date_str = now.format("%F--%T.%f").to_string();
+
+    match name {
+        Some(name) => format!(
+            "{}--{}--{}--{}",
+            date_str, name.as_ref(), typ.as_file_suffix(), file_type),
+        None => format!("{}--{}--{}",
+                        date_str, typ.as_file_suffix(), file_type),
+    }
+}
+
 impl<'a, 'b> Srv<'a, 'b> {
     pub fn new(http: tiny_http::Server,
                base_url: Url,
                output_path: &'a str,
-               send_to_name: &'b str)
+               send_to_name: &'b str,
+               save_metadata: bool)
                -> Self {
         Srv {
             http,
@@ -106,6 +143,7 @@ impl<'a, 'b> Srv<'a, 'b> {
             die_after_single_request: false,
             output_path,
             send_to_name,
+            save_metadata,
         }
     }
 
@@ -124,21 +162,12 @@ impl<'a, 'b> Srv<'a, 'b> {
         }
     }
 
-    fn create_file<T: AsRef<str>>(&self, typ: UploadType, name: Option<T>)
-                                  -> io::Result<fs::File> {
-        let date_str = {
-            let now: chrono::DateTime<chrono::Local> =
-                chrono::offset::Local::now();
-            now.format("%F--%T.%f").to_string()
-        };
 
-        let filename = match name {
-            Some(name) => format!(
-                "{}--{}--{}",
-                date_str, name.as_ref(), typ.as_file_suffix()),
-            None => format!("{}--{}", date_str, typ.as_file_suffix()),
-        };
-
+    fn create_file<T: AsRef<str>>(
+        &self, now: chrono::DateTime<chrono::Local>, typ: UploadType,
+        file_type: FileType, name: Option<T>) -> io::Result<fs::File>
+    {
+        let filename = mangle_filename(now, typ, file_type, name);
         let path = path::Path::new(self.output_path).join(filename);
         fs::OpenOptions::new()
             .read(false)
@@ -147,10 +176,15 @@ impl<'a, 'b> Srv<'a, 'b> {
             .open(path)
     }
 
-    fn write_text(&self, text: &str) -> io::Result<()> {
-        let mut file = self.create_file::<&str>(UploadType::Text, None)?;
+    fn write_text(
+        &self, now: chrono::DateTime<chrono::Local>,
+        text: &str) -> io::Result<()>
+    {
+        let mut file = self.create_file::<&str>(
+            now, UploadType::Text, FileType::Payload, None)?;
         let bytes: &[u8] = text.as_bytes();
         file.write_all(bytes)?;
+
         Ok(())
     }
 
@@ -236,6 +270,30 @@ impl<'a, 'b> Srv<'a, 'b> {
         }
     }
 
+    fn write_metadata<S: AsRef<str>>(
+        &self, now: chrono::DateTime<chrono::Local>,
+        upload_type: UploadType, name: Option<S>,
+        req: &tiny_http::Request) -> Result<(), Error>
+    {
+        if !self.save_metadata {
+            return Ok(())
+        }
+
+        let mut meta_file = self.create_file(
+            now, upload_type, FileType::Metadata, name)
+            .map_err(|e| Error::from_io_error(e, "create metadata file error"))?;
+
+        meta_file.write_fmt(
+            format_args!("{} {}\n\n", req.method(), req.http_version()))
+            .map_err(|e| Error::from_io_error(e, "write metadata"))?;
+
+        for h in req.headers().iter() {
+            meta_file.write_fmt(format_args!("{}: {}\n", h.field, h.value))
+                .map_err(|e| Error::from_io_error(e, "write metadata"))?;
+        }
+        Ok(())
+    }
+
     fn save_text(&self, req: &mut tiny_http::Request) -> Result<String, Error> {
         if req.method() != &tiny_http::Method::Post {
             return Err(Error::new(
@@ -275,7 +333,11 @@ impl<'a, 'b> Srv<'a, 'b> {
 
         let mut text = v;
 
-        self.write_text(text.to_mut())
+        let now: chrono::DateTime<chrono::Local> =
+            chrono::offset::Local::now();
+        self.write_metadata::<&str>(now, UploadType::Text, None, req)?;
+
+        self.write_text(now, text.to_mut())
             .map_err(|e| Error::from_io_error(e, "Write error"))?;
 
         Ok(format!("Saved text: {}", text))
@@ -292,8 +354,13 @@ impl<'a, 'b> Srv<'a, 'b> {
         }
     }
 
+    /// Saves the uploaded file
     fn save_file_from_request(&self, req: &mut tiny_http::Request)
                               -> Result<(), Error> {
+        let now: chrono::DateTime<chrono::Local> =
+            chrono::offset::Local::now();
+        self.write_metadata(now, UploadType::File, Some("upload"), req)?;
+
         let mut req = Multipart::from_request(req)
             .map_err(|e| Error::new(ErrorKind::ServerError,
                                     format!("{:?}", e)))?;
@@ -305,10 +372,11 @@ impl<'a, 'b> Srv<'a, 'b> {
             if name == "file" {
                 let file = self
                     .create_file(
+                        now,
                         UploadType::File,
+                        FileType::Payload,
                         entry.headers.filename.map(sanitize_filename),
-                    )
-                    .map_err(|e| Error::from_io_error(e, "create file error"));
+                    ).map_err(|e| Error::from_io_error(e, "create file error"));
 
                 let file = match file {
                     Ok(file) => file,
