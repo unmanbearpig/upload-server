@@ -2,6 +2,10 @@
 
 Allows to upload something to your computer.
 
+Uses minimal dependencies, no async stuff. Compiles slowly anyway.
+
+Code quality is poor.
+
 # Build
 
 ```
