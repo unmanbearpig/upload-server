@@ -248,7 +248,7 @@ impl<'a, 'b> Srv<'a, 'b> {
                 let content_type = filename_to_content_type(filename);
 
                 // there must be a better way
-                let content = Cow::from(content);
+                let content = content;
                 let content_type = content_type_header(content_type);
 
                 let cur = Cursor::new(content);
